@@ -1,6 +1,7 @@
 from __future__ import with_statement
-from itertools import starmap
+from itertools import chain, starmap
 import datetime
+import sys
 import warnings
 import time as mod_time
 from redis._compat import (b, izip, imap, iteritems, dictkeys, dictvalues,
@@ -140,6 +141,17 @@ def float_or_none(response):
     return float(response)
 
 
+def parse_client(response, **options):
+    parse = options['parse']
+    if parse == 'LIST':
+        clients = []
+        for c in nativestr(response).splitlines():
+            clients.append(dict([pair.split('=') for pair in c.split(' ')]))
+        return clients
+    elif parse == 'KILL':
+        return bool(response)
+
+
 def parse_config(response, **options):
     if options['parse'] == 'GET':
         response = [nativestr(i) if i is not None else None for i in response]
@@ -178,6 +190,7 @@ class StrictRedis(object):
             'SUNIONSTORE ZADD ZCARD ZREMRANGEBYRANK ZREMRANGEBYSCORE',
             int
         ),
+        string_keys_to_dict('INCRBYFLOAT HINCRBYFLOAT', float),
         string_keys_to_dict(
             # these return OK, or int if redis-server is >=1.3.4
             'LPUSH RPUSH',
@@ -205,6 +218,7 @@ class StrictRedis(object):
             ),
             'BGSAVE': lambda r: r == 'Background saving started',
             'BRPOPLPUSH': lambda r: r and r or None,
+            'CLIENT': parse_client,
             'CONFIG': parse_config,
             'DEBUG': parse_debug_object,
             'HGETALL': lambda r: r and pairs_to_dict(r) or {},
@@ -370,6 +384,14 @@ class StrictRedis(object):
         """
         return self.execute_command('BGSAVE')
 
+    def client_kill(self, address):
+        "Disconnects the client at ``address`` (ip:port)"
+        return self.execute_command('CLIENT', 'KILL', address, parse='KILL')
+
+    def client_list(self):
+        "Returns a list of currently connected clients"
+        return self.execute_command('CLIENT', 'LIST', parse='LIST')
+
     def config_get(self, pattern="*"):
         "Return a dictionary of configuration based on the ``pattern``"
         return self.execute_command('CONFIG', 'GET', pattern, parse='GET')
@@ -509,7 +531,7 @@ class StrictRedis(object):
         can be represented by an integer or a Python timedelta object.
         """
         if isinstance(time, datetime.timedelta):
-            time = int(time.total_seconds())
+            time = time.seconds + time.days * 24 * 3600
         return self.execute_command('EXPIRE', name, time)
 
     def expireat(self, name, when):
@@ -555,6 +577,13 @@ class StrictRedis(object):
         """
         return self.execute_command('INCRBY', name, amount)
 
+    def incrbyfloat(self, name, amount=1.0):
+        """
+        Increments the value at key ``name`` by floating ``amount``.
+        If no key exists, the value will be initialized as ``amount``
+        """
+        return self.execute_command('INCRBYFLOAT', name, amount)
+
     def keys(self, pattern='*'):
         "Returns a list of keys matching ``pattern``"
         return self.execute_command('KEYS', pattern)
@@ -591,6 +620,32 @@ class StrictRedis(object):
         "Removes an expiration on ``name``"
         return self.execute_command('PERSIST', name)
 
+    def pexpire(self, name, time):
+        """
+        Set an expire flag on key ``name`` for ``time`` milliseconds.
+        ``time`` can be represented by an integer or a Python timedelta
+        object.
+        """
+        if isinstance(time, datetime.timedelta):
+            ms = int(time.microseconds / 1000)
+            time = time.seconds + time.days * 24 * 3600 * 1000 + ms
+        return self.execute_command('PEXPIRE', name, time)
+
+    def pexpireat(self, name, when):
+        """
+        Set an expire flag on key ``name``. ``when`` can be represented
+        as an integer representing unix time in milliseconds (unix time * 1000)
+        or a Python datetime object.
+        """
+        if isinstance(when, datetime.datetime):
+            ms = int(when.microsecond / 1000)
+            when = int(mod_time.mktime(when.timetuple())) * 1000 + ms
+        return self.execute_command('PEXPIREAT', name, when)
+
+    def pttl(self, name):
+        "Returns the number of milliseconds until the key ``name`` will expire"
+        return self.execute_command('PTTL', name)
+
     def randomkey(self):
         "Returns the name of a random key"
         return self.execute_command('RANDOMKEY')
@@ -625,7 +680,7 @@ class StrictRedis(object):
         timedelta object.
         """
         if isinstance(time, datetime.timedelta):
-            time = int(time.total_seconds())
+            time = time.seconds + time.days * 24 * 3600
         return self.execute_command('SETEX', name, time, value)
 
     def setnx(self, name, value):
@@ -926,9 +981,16 @@ class StrictRedis(object):
         "Remove and return a random member of set ``name``"
         return self.execute_command('SPOP', name)
 
-    def srandmember(self, name):
-        "Return a random member of set ``name``"
-        return self.execute_command('SRANDMEMBER', name)
+    def srandmember(self, name, number=None):
+        """
+        If ``number`` is None, returns a random member of set ``name``.
+
+        If ``number`` is supplied, returns a list of ``number`` random
+        memebers of set ``name``. Note this is only available when running
+        Redis 2.6+.
+        """
+        args = number and [number] or []
+        return self.execute_command('SRANDMEMBER', name, *args)
 
     def srem(self, name, *values):
         "Remove ``values`` from set ``name``"
@@ -1168,6 +1230,12 @@ class StrictRedis(object):
         "Increment the value of ``key`` in hash ``name`` by ``amount``"
         return self.execute_command('HINCRBY', name, key, amount)
 
+    def hincrbyfloat(self, name, key, amount=1.0):
+        """
+        Increment the value of ``key`` in hash ``name`` by floating ``amount``
+        """
+        return self.execute_command('HINCRBYFLOAT', name, key, amount)
+
     def hkeys(self, name):
         "Return the list of keys within hash ``name``"
         return self.execute_command('HKEYS', name)
@@ -1286,6 +1354,7 @@ class Redis(StrictRedis):
         StrictRedis.RESPONSE_CALLBACKS,
         {
             'TTL': lambda r: r != -1 and r or None,
+            'PTTL': lambda r: r != -1 and r or None,
         }
     )
 
@@ -1310,7 +1379,7 @@ class Redis(StrictRedis):
         timedelta object.
         """
         if isinstance(time, datetime.timedelta):
-            time = int(time.total_seconds())
+            time = time.seconds + time.days * 24 * 3600
         return self.execute_command('SETEX', name, time, value)
 
     def lrem(self, name, value, num=0):
@@ -1628,27 +1697,40 @@ class BasePipeline(object):
         self.command_stack.append((args, options))
         return self
 
-    def _execute_transaction(self, connection, commands):
+    def _execute_transaction(self, connection, commands, raise_on_error):
+        cmds = chain([(('MULTI', ), {})], commands, [(('EXEC', ), {})])
         all_cmds = SYM_EMPTY.join(
             starmap(connection.pack_command,
-                    [args for args, options in commands]))
+                    [args for args, options in cmds]))
         connection.send_packed_command(all_cmds)
-        # we don't care about the multi/exec any longer
-        commands = commands[1:-1]
-        # parse off the response for MULTI and all commands prior to EXEC.
-        # the only data we care about is the response the EXEC
-        # which is the last command
-        for i in range(len(commands) + 1):
-            self.parse_response(connection, '_')
+        # parse off the response for MULTI
+        self.parse_response(connection, '_')
+        # and all the other commands
+        errors = []
+        for i, _ in enumerate(commands):
+            try:
+                self.parse_response(connection, '_')
+            except ResponseError:
+                errors.append((i, sys.exc_info()[1]))
+
         # parse the EXEC.
         response = self.parse_response(connection, '_')
 
         if response is None:
             raise WatchError("Watched variable changed.")
 
+        # put any parse errors into the response
+        for i, e in errors:
+            response.insert(i, e)
+
         if len(response) != len(commands):
             raise ResponseError("Wrong number of response items from "
                                 "pipeline execution")
+
+        # find any errors in the response and raise if necessary
+        if raise_on_error:
+            self.raise_first_error(response)
+
         # We have to run response callbacks manually
         data = []
         for r, cmd in izip(response, commands):
@@ -1660,14 +1742,22 @@ class BasePipeline(object):
             data.append(r)
         return data
 
-    def _execute_pipeline(self, connection, commands):
+    def _execute_pipeline(self, connection, commands, raise_on_error):
         # build up all commands into a single request to increase network perf
         all_cmds = SYM_EMPTY.join(
             starmap(connection.pack_command,
                     [args for args, options in commands]))
         connection.send_packed_command(all_cmds)
-        return [self.parse_response(connection, args[0], **options)
-                for args, options in commands]
+        response = [self.parse_response(connection, args[0], **options)
+                    for args, options in commands]
+        if raise_on_error:
+            self.raise_first_error(response)
+        return response
+
+    def raise_first_error(self, response):
+        for r in response:
+            if isinstance(r, ResponseError):
+                raise r
 
     def parse_response(self, connection, command_name, **options):
         result = StrictRedis.parse_response(
@@ -1689,13 +1779,12 @@ class BasePipeline(object):
                 if not exist:
                     immediate('SCRIPT', 'LOAD', s.script, **{'parse': 'LOAD'})
 
-    def execute(self):
+    def execute(self, raise_on_error=True):
         "Execute all the commands in the current pipeline"
         if self.scripts:
             self.load_scripts()
         stack = self.command_stack
         if self.transaction or self.explicit_transaction:
-            stack = [(('MULTI', ), {})] + stack + [(('EXEC', ), {})]
             execute = self._execute_transaction
         else:
             execute = self._execute_pipeline
@@ -1709,7 +1798,7 @@ class BasePipeline(object):
             self.connection = conn
 
         try:
-            return execute(conn, stack)
+            return execute(conn, stack, raise_on_error)
         except ConnectionError:
             conn.disconnect()
             # if we were watching a variable, the watch is no longer valid
@@ -1722,7 +1811,7 @@ class BasePipeline(object):
                                  "one or more keys")
             # otherwise, it's safe to retry since the transaction isn't
             # predicated on any state
-            return execute(conn, stack)
+            return execute(conn, stack, raise_on_error)
         finally:
             self.reset()
 

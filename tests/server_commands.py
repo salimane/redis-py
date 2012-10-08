@@ -69,6 +69,11 @@ class ServerCommandsTestCase(unittest.TestCase):
         del self.client['a']
         self.assertEquals(self.client.get('a'), None)
 
+    def test_client_list(self):
+        clients = self.client.client_list()
+        self.assert_(isinstance(clients[0], dict))
+        self.assert_('addr' in clients[0])
+
     def test_config_get(self):
         data = self.client.config_get()
         self.assert_('maxmemory' in data)
@@ -180,6 +185,41 @@ class ServerCommandsTestCase(unittest.TestCase):
         self.client['b'] = 'bar'
         self.assertEquals(self.client.expireat('b', expire_at), True)
         self.assertEquals(self.client.ttl('b'), 60)
+
+    def test_pexpire(self):
+        version = self.client.info()['redis_version']
+        if StrictVersion(version) < StrictVersion('2.6.0'):
+            try:
+                raise unittest.SkipTest()
+            except AttributeError:
+                return
+
+        self.assertEquals(self.client.pexpire('a', 10000), False)
+        self.client['a'] = 'foo'
+        self.assertEquals(self.client.pexpire('a', 10000), True)
+        self.assert_(self.client.pttl('a') <= 10000)
+        self.assertEquals(self.client.persist('a'), True)
+        self.assertEquals(self.client.pttl('a'), None)
+
+    def test_pexpireat(self):
+        version = self.client.info()['redis_version']
+        if StrictVersion(version) < StrictVersion('2.6.0'):
+            try:
+                raise unittest.SkipTest()
+            except AttributeError:
+                return
+
+        expire_at = datetime.datetime.now() + datetime.timedelta(minutes=1)
+        self.assertEquals(self.client.pexpireat('a', expire_at), False)
+        self.client['a'] = 'foo'
+        # expire at in unix time (milliseconds)
+        expire_at_seconds = int(time.mktime(expire_at.timetuple())) * 1000
+        self.assertEquals(self.client.pexpireat('a', expire_at_seconds), True)
+        self.assert_(self.client.ttl('a') <= 60)
+        # expire at given a datetime object
+        self.client['b'] = 'bar'
+        self.assertEquals(self.client.pexpireat('b', expire_at), True)
+        self.assert_(self.client.ttl('b') <= 60)
 
     def test_get_set_bit(self):
         self.assertEquals(self.client.getbit('a', 5), False)
@@ -311,6 +351,19 @@ class ServerCommandsTestCase(unittest.TestCase):
         self.assertEquals(self.client['a'], b('2'))
         self.assertEquals(self.client.incr('a', amount=5), 7)
         self.assertEquals(self.client['a'], b('7'))
+
+    def test_incrbyfloat(self):
+        version = self.client.info()['redis_version']
+        if StrictVersion(version) < StrictVersion('2.6.0'):
+            try:
+                raise unittest.SkipTest()
+            except AttributeError:
+                return
+
+        self.assertEquals(self.client.incrbyfloat('a'), 1.0)
+        self.assertEquals(self.client['a'], b('1'))
+        self.assertEquals(self.client.incrbyfloat('a', 1.1), 2.1)
+        self.assertEquals(float(self.client['a']), float(2.1))
 
     def test_keys(self):
         self.assertEquals(self.client.keys(), [])
@@ -535,7 +588,11 @@ class ServerCommandsTestCase(unittest.TestCase):
         del self.client['a']
         # real logic
         version = self.client.info()['redis_version']
-        if StrictVersion(version) >= StrictVersion('1.3.4'):
+        if StrictVersion(version) >= StrictVersion('2.4.0'):
+            self.assertEqual(1, self.client.lpush('a', 'b'))
+            self.assertEqual(2, self.client.lpush('a', 'a'))
+            self.assertEqual(4, self.client.lpush('a', 'b', 'a'))
+        elif StrictVersion(version) >= StrictVersion('1.3.4'):
             self.assertEqual(1, self.client.lpush('a', 'b'))
             self.assertEqual(2, self.client.lpush('a', 'a'))
         else:
@@ -669,7 +726,11 @@ class ServerCommandsTestCase(unittest.TestCase):
         del self.client['a']
         # real logic
         version = self.client.info()['redis_version']
-        if StrictVersion(version) >= StrictVersion('1.3.4'):
+        if StrictVersion(version) >= StrictVersion('2.4.0'):
+            self.assertEqual(1, self.client.rpush('a', 'a'))
+            self.assertEqual(2, self.client.rpush('a', 'b'))
+            self.assertEqual(4, self.client.rpush('a', 'a', 'b'))
+        elif StrictVersion(version) >= StrictVersion('1.3.4'):
             self.assertEqual(1, self.client.rpush('a', 'a'))
             self.assertEqual(2, self.client.rpush('a', 'b'))
         else:
@@ -845,6 +906,13 @@ class ServerCommandsTestCase(unittest.TestCase):
         # real logic
         self.make_set('a', 'abc')
         self.assert_(self.client.srandmember('a') in b('abc'))
+
+        version = self.client.info()['redis_version']
+        if StrictVersion(version) >= StrictVersion('2.6.0'):
+            randoms = self.client.srandmember('a', number=2)
+            self.assertEquals(len(randoms), 2)
+            for r in randoms:
+                self.assert_(r in b('abc'))
 
     def test_srem(self):
         # key is not set
@@ -1290,6 +1358,24 @@ class ServerCommandsTestCase(unittest.TestCase):
         self.client.hset('a', 'a3', 'foo')
         self.assertRaises(redis.ResponseError, self.client.hincrby, 'a', 'a3')
 
+    def test_hincrbyfloat(self):
+        version = self.client.info()['redis_version']
+        if StrictVersion(version) < StrictVersion('2.6.0'):
+            try:
+                raise unittest.SkipTest()
+            except AttributeError:
+                return
+
+        # key is not a hash
+        self.client['a'] = 'a'
+        self.assertRaises(redis.ResponseError,
+                          self.client.hincrbyfloat, 'a', 'a1')
+        del self.client['a']
+        # no key should create the hash and incr the key's value to 1
+        self.assertEquals(self.client.hincrbyfloat('a', 'a1'), 1.0)
+        self.assertEquals(self.client.hincrbyfloat('a', 'a1'), 2.0)
+        self.assertEquals(self.client.hincrbyfloat('a', 'a1', 1.2), 3.2)
+
     def test_hkeys(self):
         # key is not a hash
         self.client['a'] = 'a'
@@ -1462,6 +1548,22 @@ class ServerCommandsTestCase(unittest.TestCase):
         self.assertEquals(client.persist('a'), True)
         self.assertEquals(client.ttl('a'), -1)
 
+    def test_strict_pexpire(self):
+        client = self.get_client(redis.StrictRedis)
+        version = client.info()['redis_version']
+        if StrictVersion(version) < StrictVersion('2.6.0'):
+            try:
+                raise unittest.SkipTest()
+            except AttributeError:
+                return
+
+        self.assertEquals(client.pexpire('a', 10000), False)
+        self.client['a'] = 'foo'
+        self.assertEquals(client.pexpire('a', 10000), True)
+        self.assert_(client.pttl('a') <= 10000)
+        self.assertEquals(client.persist('a'), True)
+        self.assertEquals(client.pttl('a'), -1)
+
     ## BINARY SAFE
     # TODO add more tests
     def test_binary_get_set(self):
@@ -1545,3 +1647,12 @@ class ServerCommandsTestCase(unittest.TestCase):
         data = ''.join(data)
         self.client.set('a', data)
         self.assertEquals(self.client.get('a'), b(data))
+
+    def test_floating_point_encoding(self):
+        """
+        High precision floating point values sent to the server should keep
+        precision.
+        """
+        timestamp = 1349673917.939762
+        self.client.zadd('a', 'aaa', timestamp)
+        self.assertEquals(self.client.zscore('a', 'aaa'), timestamp)
