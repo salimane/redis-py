@@ -5,7 +5,7 @@ import sys
 import warnings
 import time as mod_time
 from redis._compat import (b, izip, imap, iteritems, dictkeys, dictvalues,
-                           basestring, long, nativestr, urlparse)
+                           basestring, long, nativestr, urlparse, bytes)
 from redis.connection import ConnectionPool, UnixDomainSocketConnection
 from redis.exceptions import (
     ConnectionError,
@@ -13,7 +13,8 @@ from redis.exceptions import (
     RedisError,
     ResponseError,
     WatchError,
-    NoScriptError
+    NoScriptError,
+    ExecAbortError,
 )
 
 SYM_EMPTY = b('')
@@ -23,9 +24,9 @@ def list_or_args(keys, args):
     # returns a single list combining keys and args
     try:
         iter(keys)
-        # a string can be iterated, but indicates
+        # a string or bytes instance can be iterated, but indicates
         # keys wasn't passed as a list
-        if isinstance(keys, basestring):
+        if isinstance(keys, (basestring, bytes)):
             keys = [keys]
     except TypeError:
         keys = [keys]
@@ -1714,7 +1715,13 @@ class BasePipeline(object):
                 errors.append((i, sys.exc_info()[1]))
 
         # parse the EXEC.
-        response = self.parse_response(connection, '_')
+        try:
+            response = self.parse_response(connection, '_')
+        except ExecAbortError:
+            self.immediate_execute_command('DISCARD')
+            if errors:
+                raise errors[0][1]
+            raise sys.exc_info()[1]
 
         if response is None:
             raise WatchError("Watched variable changed.")
