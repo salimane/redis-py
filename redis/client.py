@@ -89,23 +89,23 @@ def parse_info(response):
     def get_value(value):
         if ',' not in value or '=' not in value:
             try:
-		if '.' in value:
-		    return float(value)
-		else:
-		    return int(value)
+                if '.' in value:
+                    return float(value)
+                else:
+                    return int(value)
             except ValueError:
-		return value
-	else:
-	    sub_dict = {}
-	    for item in value.split(','):
-		k, v = item.rsplit('=', 1)
-		sub_dict[k] = get_value(v)
-	    return sub_dict
+                return value
+        else:
+            sub_dict = {}
+            for item in value.split(','):
+                k, v = item.rsplit('=', 1)
+                sub_dict[k] = get_value(v)
+            return sub_dict
 
     for line in response.splitlines():
         if line and not line.startswith('#'):
             key, value = line.split(':')
-	    info[key] = get_value(value)
+            info[key] = get_value(value)
     return info
 
 
@@ -427,26 +427,26 @@ class StrictRedis(object):
         return self.execute_command('FLUSHALL')
 
     def flushdb(self):
-	"Delete all keys in the current database"
-	return self.execute_command('FLUSHDB')
+        "Delete all keys in the current database"
+        return self.execute_command('FLUSHDB')
 
     def info(self, section=None):
-	"""
-	Returns a dictionary containing information about the Redis server
+        """
+        Returns a dictionary containing information about the Redis server
 
-	The ``section`` option can be used to select a specific section
-	of information
+        The ``section`` option can be used to select a specific section
+        of information
 
-	The section option is not supported by older versions of Redis Server,
-	and will generate ResponseError
-	"""
-	if section is None:
-	    return self.execute_command('INFO')
-	else:
-	    return self.execute_command('INFO', section)
+        The section option is not supported by older versions of Redis Server,
+        and will generate ResponseError
+        """
+        if section is None:
+            return self.execute_command('INFO')
+        else:
+            return self.execute_command('INFO', section)
 
     def lastsave(self):
-	"""
+        """
         Return a Python datetime object representing the last time the
         Redis database was saved to disk
         """
@@ -508,11 +508,11 @@ class StrictRedis(object):
         ``start`` and ``end`` paramaters indicate which bytes to consider
         """
         params = [key]
-	if start is not None and end is not None:
+        if start is not None and end is not None:
             params.append(start)
             params.append(end)
-	elif (start is not None and end is None) or \
-		(end is not None and start is None):
+        elif (start is not None and end is None) or \
+                (end is not None and start is None):
             raise RedisError("Both start and end must be specified")
         return self.execute_command('BITCOUNT', *params)
 
@@ -1351,6 +1351,7 @@ class StrictRedis(object):
         with LUA scripts.
         """
         return Script(self, script)
+
 
 class Redis(StrictRedis):
     """
