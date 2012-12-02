@@ -9,6 +9,7 @@ from redis._compat import (unichr, u, b, ascii_letters, iteritems, dictkeys,
 from redis.client import parse_info
 import redis
 
+
 class ServerCommandsTestCase(unittest.TestCase):
     def get_client(self, cls=redis.Redis):
         return cls(host='localhost', port=6379, db=9)
@@ -251,7 +252,7 @@ class ServerCommandsTestCase(unittest.TestCase):
         self.client.setbit('a', 25, True)
         self.client.setbit('a', 33, True)
         self.assertEquals(self.client.bitcount('a'), 5)
-	self.assertEquals(self.client.bitcount('a', 0, -1), 5)
+        self.assertEquals(self.client.bitcount('a', 0, -1), 5)
         self.assertEquals(self.client.bitcount('a', 2, 3), 2)
         self.assertEquals(self.client.bitcount('a', 2, -1), 3)
         self.assertEquals(self.client.bitcount('a', -2, -1), 2)
@@ -1291,7 +1292,8 @@ class ServerCommandsTestCase(unittest.TestCase):
         self.assert_(self.client.hmset('foo', d))
         self.assertEqual(
             self.client.hmget('foo', ['a', 'b', 'c']), [b('1'), b('2'), b('3')])
-        self.assertEqual(self.client.hmget('foo', ['a', 'c']), [b('1'), b('3')])
+        self.assertEqual(
+            self.client.hmget('foo', ['a', 'c']), [b('1'), b('3')])
         # using *args type args
         self.assertEquals(self.client.hmget('foo', 'a', 'c'), [b('1'), b('3')])
 
