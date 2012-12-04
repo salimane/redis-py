@@ -99,7 +99,7 @@ def parse_info(response):
             sub_dict = {}
             for item in value.split(','):
                 k, v = item.rsplit('=', 1)
-                sub_dict[k] = get_value(v)
+                sub_dict[k] = get_value(v)  
             return sub_dict
 
     for line in response.splitlines():
@@ -433,10 +433,10 @@ class StrictRedis(object):
     def info(self, section=None):
         """
         Returns a dictionary containing information about the Redis server
-
-        The ``section`` option can be used to select a specific section
+        
+        The ``section`` option can be used to select a specific section 
         of information
-
+        
         The section option is not supported by older versions of Redis Server,
         and will generate ResponseError
         """
@@ -1351,7 +1351,6 @@ class StrictRedis(object):
         with LUA scripts.
         """
         return Script(self, script)
-
 
 class Redis(StrictRedis):
     """
