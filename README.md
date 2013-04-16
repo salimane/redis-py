@@ -6,6 +6,9 @@ The Python interface to the Redis key-value store.
 
 ## Installation
 
+*NOTE:* redis-py requires a running Redis server.
+See [Redis's quickstart](http://redis.io/topics/quickstart) for installation instructions.
+
     $ sudo pip install redis
 
 or alternatively (you really should be using pip though):
@@ -31,7 +34,7 @@ From source:
 The official Redis documentation does a great job of explaining each command in
 detail (http://redis.io/commands). redis-py exposes two client classes that
 implement these commands. The StrictRedis class attempts to adhere to the
-official official command syntax. There are a few exceptions:
+official command syntax. There are a few exceptions:
 
 * SELECT: Not implemented. See the explanation in the Thread Safety section
   below.

@@ -75,6 +75,31 @@ class ServerCommandsTestCase(unittest.TestCase):
         self.assert_(isinstance(clients[0], dict))
         self.assert_('addr' in clients[0])
 
+    def test_client_getname(self):
+        version = self.client.info()['redis_version']
+        if StrictVersion(version) < StrictVersion('2.6.9'):
+            try:
+                raise unittest.SkipTest()
+            except AttributeError:
+                return
+
+        name = self.client.client_getname()
+        self.assertEquals(name, None)
+
+    def test_client_setname(self):
+        version = self.client.info()['redis_version']
+        if StrictVersion(version) < StrictVersion('2.6.9'):
+            try:
+                raise unittest.SkipTest()
+            except AttributeError:
+                return
+
+        self.assert_(self.client.client_setname('redis_py_test'))
+        self.assertEquals(
+            self.client.client_getname(),
+            'redis_py_test'
+        )
+
     def test_config_get(self):
         data = self.client.config_get()
         self.assert_('maxmemory' in data)
@@ -525,6 +550,10 @@ class ServerCommandsTestCase(unittest.TestCase):
             self.client.lrange('b', 0, -1),
             [b('1'), b('2'), b('3'), b('4')])
 
+    def test_brpoplpush_empty_string(self):
+        self.client.lpush('a', '')
+        self.assertEquals(self.client.brpoplpush('a', 'b'), b(''))
+
     def test_lindex(self):
         # no key
         self.assertEquals(self.client.lindex('a', '0'), None)
@@ -918,15 +947,15 @@ class ServerCommandsTestCase(unittest.TestCase):
 
     def test_srem(self):
         # key is not set
-        self.assertEquals(self.client.srem('a', 'a'), False)
+        self.assertEquals(self.client.srem('a', 'a'), 0)
         # key is not a set
         self.client['a'] = 'a'
         self.assertRaises(redis.ResponseError, self.client.srem, 'a', 'a')
         del self.client['a']
         # real logic
-        self.make_set('a', 'abc')
-        self.assertEquals(self.client.srem('a', 'd'), False)
-        self.assertEquals(self.client.srem('a', 'b'), True)
+        self.make_set('a', 'abcd')
+        self.assertEquals(self.client.srem('a', 'e'), 0)
+        self.assertEquals(self.client.srem('a', 'b', 'd'), 2)
         self.assertEquals(self.client.smembers('a'), set([b('a'), b('c')]))
 
     def test_sunion(self):

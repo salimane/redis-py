@@ -99,7 +99,7 @@ def parse_info(response):
             sub_dict = {}
             for item in value.split(','):
                 k, v = item.rsplit('=', 1)
-                sub_dict[k] = get_value(v)  
+                sub_dict[k] = get_value(v)
             return sub_dict
 
     for line in response.splitlines():
@@ -148,6 +148,10 @@ def parse_client(response, **options):
         return clients
     elif parse == 'KILL':
         return bool(response)
+    elif parse == 'GETNAME':
+        return response and nativestr(response)
+    elif parse == 'SETNAME':
+        return nativestr(response) == 'OK'
 
 
 def parse_config(response, **options):
@@ -179,12 +183,12 @@ class StrictRedis(object):
     RESPONSE_CALLBACKS = dict_merge(
         string_keys_to_dict(
             'AUTH DEL EXISTS EXPIRE EXPIREAT HDEL HEXISTS HMSET MOVE MSETNX '
-            'PERSIST RENAMENX SISMEMBER SMOVE SETEX SETNX SREM ZREM',
+            'PERSIST RENAMENX SISMEMBER SMOVE SETEX SETNX ZREM',
             bool
         ),
         string_keys_to_dict(
             'BITCOUNT DECRBY GETBIT HLEN INCRBY LINSERT LLEN LPUSHX RPUSHX '
-            'SADD SCARD SDIFFSTORE SETBIT SETRANGE SINTERSTORE STRLEN '
+            'SADD SCARD SDIFFSTORE SETBIT SETRANGE SINTERSTORE SREM STRLEN '
             'SUNIONSTORE ZADD ZCARD ZREMRANGEBYRANK ZREMRANGEBYSCORE',
             int
         ),
@@ -212,10 +216,9 @@ class StrictRedis(object):
         string_keys_to_dict('ZRANK ZREVRANK', int_or_none),
         {
             'BGREWRITEAOF': (
-                lambda r: r == 'Background rewriting of AOF file started'
+                lambda r: nativestr(r) == 'Background rewriting of AOF file started'
             ),
-            'BGSAVE': lambda r: r == 'Background saving started',
-            'BRPOPLPUSH': lambda r: r and r or None,
+            'BGSAVE': lambda r: nativestr(r) == 'Background saving started',
             'CLIENT': parse_client,
             'CONFIG': parse_config,
             'DEBUG': parse_debug_object,
@@ -315,13 +318,15 @@ class StrictRedis(object):
         should expect a single arguement which is a Pipeline object.
         """
         shard_hint = kwargs.pop('shard_hint', None)
+        value_from_callable = kwargs.pop('value_from_callable', False)
         with self.pipeline(True, shard_hint) as pipe:
             while 1:
                 try:
                     if watches:
                         pipe.watch(*watches)
-                    func(pipe)
-                    return pipe.execute()
+                    func_value = func(pipe)
+                    exec_value = pipe.execute()
+                    return func_value if value_from_callable else exec_value
                 except WatchError:
                     continue
 
@@ -390,6 +395,14 @@ class StrictRedis(object):
         "Returns a list of currently connected clients"
         return self.execute_command('CLIENT', 'LIST', parse='LIST')
 
+    def client_getname(self):
+        "Returns the current connection name"
+        return self.execute_command('CLIENT', 'GETNAME', parse='GETNAME')
+
+    def client_setname(self, name):
+        "Sets the current connection name"
+        return self.execute_command('CLIENT', 'SETNAME', name, parse='SETNAME')
+
     def config_get(self, pattern="*"):
         "Return a dictionary of configuration based on the ``pattern``"
         return self.execute_command('CONFIG', 'GET', pattern, parse='GET')
@@ -433,10 +446,10 @@ class StrictRedis(object):
     def info(self, section=None):
         """
         Returns a dictionary containing information about the Redis server
-        
-        The ``section`` option can be used to select a specific section 
+
+        The ``section`` option can be used to select a specific section
         of information
-        
+
         The section option is not supported by older versions of Redis Server,
         and will generate ResponseError
         """
@@ -1463,7 +1476,7 @@ class PubSub(object):
             if self.connection and (self.channels or self.patterns):
                 self.connection.disconnect()
             self.reset()
-        except:
+        except Exception:
             pass
 
     def reset(self):
@@ -1621,8 +1634,11 @@ class BasePipeline(object):
     def __del__(self):
         try:
             self.reset()
-        except:
+        except Exception:
             pass
+
+    def __len__(self):
+        return len(self.command_stack)
 
     def reset(self):
         self.command_stack = []
@@ -1727,7 +1743,8 @@ class BasePipeline(object):
         try:
             response = self.parse_response(connection, '_')
         except ExecAbortError:
-            self.immediate_execute_command('DISCARD')
+            if self.explicit_transaction:
+                self.immediate_execute_command('DISCARD')
             if errors:
                 raise errors[0][1]
             raise sys.exc_info()[1]
