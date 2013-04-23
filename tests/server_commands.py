@@ -247,6 +247,16 @@ class ServerCommandsTestCase(unittest.TestCase):
         self.assertEquals(self.client.pexpireat('b', expire_at), True)
         self.assert_(self.client.ttl('b') <= 60)
 
+    def test_psetex(self):
+        self.assertEquals(self.client.psetex('a', 1000, 'value'), True)
+        self.assertEquals(self.client['a'], b('value'))
+        self.assert_(0 < self.client.pttl('a') <= 1000)
+        # expire given a timeelta
+        expire_at = datetime.timedelta(milliseconds=1000)
+        self.assertEquals(self.client.psetex('a', expire_at, 'value'), True)
+        self.assertEquals(self.client['a'], b('value'))
+        self.assert_(0 < self.client.pttl('a') <= 1000)
+
     def test_get_set_bit(self):
         self.assertEquals(self.client.getbit('a', 5), False)
         self.assertEquals(self.client.setbit('a', 5, True), False)
@@ -1320,9 +1330,11 @@ class ServerCommandsTestCase(unittest.TestCase):
         d = {'a': 1, 'b': 2, 'c': 3}
         self.assert_(self.client.hmset('foo', d))
         self.assertEqual(
-            self.client.hmget('foo', ['a', 'b', 'c']), [b('1'), b('2'), b('3')])
+            self.client.hmget('foo', ['a', 'b', 'c']), [b('1'), b('2'), b('3')]
+        )
         self.assertEqual(
-            self.client.hmget('foo', ['a', 'c']), [b('1'), b('3')])
+            self.client.hmget('foo', ['a', 'c']), [b('1'), b('3')]
+        )
         # using *args type args
         self.assertEquals(self.client.hmget('foo', 'a', 'c'), [b('1'), b('3')])
 
@@ -1500,6 +1512,55 @@ class ServerCommandsTestCase(unittest.TestCase):
         self.assertEquals(
             self.client.sort('a', get=('user:*', '#')),
             [b('u1'), b('1'), b('u2'), b('2'), b('u3'), b('3')])
+
+    def test_sort_get_groups_two(self):
+        self.client['user:1'] = 'u1'
+        self.client['user:2'] = 'u2'
+        self.client['user:3'] = 'u3'
+        self.make_list('a', '231')
+        self.assertEquals(
+            self.client.sort('a', get=('user:*', '#'), groups=True),
+            [(b('u1'), b('1')), (b('u2'), b('2')), (b('u3'), b('3'))])
+
+    def test_sort_groups_string_get(self):
+        self.client['user:1'] = 'u1'
+        self.client['user:2'] = 'u2'
+        self.client['user:3'] = 'u3'
+        self.make_list('a', '231')
+        self.assertRaises(redis.DataError, self.client.sort, 'a',
+                          get='user:*', groups=True)
+
+    def test_sort_groups_just_one_get(self):
+        self.client['user:1'] = 'u1'
+        self.client['user:2'] = 'u2'
+        self.client['user:3'] = 'u3'
+        self.make_list('a', '231')
+        self.assertRaises(redis.DataError, self.client.sort, 'a',
+                          get=['user:*'], groups=True)
+
+    def test_sort_groups_no_get(self):
+        self.client['user:1'] = 'u1'
+        self.client['user:2'] = 'u2'
+        self.client['user:3'] = 'u3'
+        self.make_list('a', '231')
+        self.assertRaises(redis.DataError, self.client.sort, 'a', groups=True)
+
+    def test_sort_groups_three_gets(self):
+        self.client['user:1'] = 'u1'
+        self.client['user:2'] = 'u2'
+        self.client['user:3'] = 'u3'
+        self.client['door:1'] = 'd1'
+        self.client['door:2'] = 'd2'
+        self.client['door:3'] = 'd3'
+        self.make_list('a', '231')
+        self.assertEquals(
+            self.client.sort('a', get=('user:*', 'door:*', '#'), groups=True),
+            [
+                (b('u1'), b('d1'), b('1')),
+                (b('u2'), b('d2'), b('2')),
+                (b('u3'), b('d3'), b('3'))
+            ]
+        )
 
     def test_sort_desc(self):
         self.make_list('a', '231')

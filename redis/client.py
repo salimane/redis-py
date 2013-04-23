@@ -127,6 +127,17 @@ def zset_score_pairs(response, **options):
     return list(izip(it, imap(score_cast_func, it)))
 
 
+def sort_return_tuples(response, **options):
+    """
+    If ``groups`` is specified, return the response as a list of
+    n-element tuples with n being the value found in options['groups']
+    """
+    if not response or not options['groups']:
+        return response
+    n = options['groups']
+    return list(izip(*[response[i::n] for i in range(n)]))
+
+
 def int_or_none(response):
     if response is None:
         return None
@@ -183,7 +194,7 @@ class StrictRedis(object):
     RESPONSE_CALLBACKS = dict_merge(
         string_keys_to_dict(
             'AUTH DEL EXISTS EXPIRE EXPIREAT HDEL HEXISTS HMSET MOVE MSETNX '
-            'PERSIST RENAMENX SISMEMBER SMOVE SETEX SETNX ZREM',
+            'PERSIST PSETEX RENAMENX SISMEMBER SMOVE SETEX SETNX ZREM',
             bool
         ),
         string_keys_to_dict(
@@ -198,6 +209,7 @@ class StrictRedis(object):
             'LPUSH RPUSH',
             lambda r: isinstance(r, long) and r or nativestr(r) == 'OK'
         ),
+        string_keys_to_dict('SORT', sort_return_tuples),
         string_keys_to_dict('ZSCORE ZINCRBY', float_or_none),
         string_keys_to_dict(
             'FLUSHALL FLUSHDB LSET LTRIM MSET RENAME '
@@ -216,7 +228,8 @@ class StrictRedis(object):
         string_keys_to_dict('ZRANK ZREVRANK', int_or_none),
         {
             'BGREWRITEAOF': (
-                lambda r: nativestr(r) == 'Background rewriting of AOF file started'
+                lambda r: nativestr(r) == ('Background rewriting of AOF '
+                                           'file started')
             ),
             'BGSAVE': lambda r: nativestr(r) == 'Background saving started',
             'CLIENT': parse_client,
@@ -651,7 +664,7 @@ class StrictRedis(object):
         """
         if isinstance(time, datetime.timedelta):
             ms = int(time.microseconds / 1000)
-            time = time.seconds + time.days * 24 * 3600 * 1000 + ms
+            time = (time.seconds + time.days * 24 * 3600) * 1000 + ms
         return self.execute_command('PEXPIRE', name, time)
 
     def pexpireat(self, name, when):
@@ -664,6 +677,17 @@ class StrictRedis(object):
             ms = int(when.microsecond / 1000)
             when = int(mod_time.mktime(when.timetuple())) * 1000 + ms
         return self.execute_command('PEXPIREAT', name, when)
+
+    def psetex(self, name, time_ms, value):
+        """
+        Set the value of key ``name`` to ``value`` that expires in ``time_ms``
+        milliseconds. ``time_ms`` can be represented by an integer or a Python
+        timedelta object
+        """
+        if isinstance(time_ms, datetime.timedelta):
+            ms = int(time_ms.microseconds / 1000)
+            time_ms = (time_ms.seconds + time_ms.days * 24 * 3600) * 1000 + ms
+        return self.execute_command('PSETEX', name, time_ms, value)
 
     def pttl(self, name):
         "Returns the number of milliseconds until the key ``name`` will expire"
@@ -900,7 +924,7 @@ class StrictRedis(object):
         return self.execute_command('RPUSHX', name, value)
 
     def sort(self, name, start=None, num=None, by=None, get=None,
-             desc=False, alpha=False, store=None):
+             desc=False, alpha=False, store=None, groups=False):
         """
         Sort and return the list, set or sorted set at ``name``.
 
@@ -919,6 +943,11 @@ class StrictRedis(object):
 
         ``store`` allows for storing the result of the sort into
             the key ``store``
+
+        ``groups`` if set to True and if ``get`` contains at least two
+            elements, sort will return a list of tuples, each containing the
+            values fetched from the arguments to ``get``.
+
         """
         if (start is not None and num is None) or \
                 (num is not None and start is None):
@@ -951,7 +980,15 @@ class StrictRedis(object):
         if store is not None:
             pieces.append('STORE')
             pieces.append(store)
-        return self.execute_command('SORT', *pieces)
+
+        if groups:
+            if not get or isinstance(get, basestring) or len(get) < 2:
+                raise DataError('when using "groups" the "get" argument '
+                                'must be specified and contain at least '
+                                'two keys')
+
+        options = {'groups': len(get) if groups else None}
+        return self.execute_command('SORT', *pieces, **options)
 
     #### SET COMMANDS ####
     def sadd(self, name, *values):
@@ -1364,6 +1401,7 @@ class StrictRedis(object):
         with LUA scripts.
         """
         return Script(self, script)
+
 
 class Redis(StrictRedis):
     """
@@ -1781,8 +1819,15 @@ class BasePipeline(object):
             starmap(connection.pack_command,
                     [args for args, options in commands]))
         connection.send_packed_command(all_cmds)
-        response = [self.parse_response(connection, args[0], **options)
-                    for args, options in commands]
+
+        response = []
+        for args, options in commands:
+            try:
+                response.append(
+                    self.parse_response(connection, args[0], **options))
+            except ResponseError:
+                response.append(sys.exc_info()[1])
+
         if raise_on_error:
             self.raise_first_error(response)
         return response
